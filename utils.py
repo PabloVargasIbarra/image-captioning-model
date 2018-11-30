@@ -6,11 +6,38 @@ import os
 import queue
 import threading
 import zipfile
+import json
+from collections import defaultdict
 import cv2
 import numpy as np
+import matplotlib.pyplot as plt
 import pickle
+import keras.backend as K
+from keras.applications import InceptionV3
+from keras.applications import inception_v3
+from keras.models import Model
+from keras.layers import GlobalAveragePooling2D
+import tqdm
 
+def get_cnn_encoder():
+    # Transfer Learning : we take the last hidden layer of IncetionV3 as an image embedding
+    K.set_learning_phase(False)
+    model = InceptionV3(include_top=False)
+    preprocess_for_model = inception_v3.preprocess_input
+    model = Model(model.inputs, GlobalAveragePooling2D()(model.output))
+    return model, preprocess_for_model
 
+def get_captions_for_fns(fns, zip_fn, zip_json_path):
+    # extract captions from zip
+    zf = zipfile.ZipFile(zip_fn)
+    j = json.loads(zf.read(zip_json_path).decode("utf8"))
+    id_to_fn = {img["id"]: img["file_name"] for img in j["images"]}
+    fn_to_caps = defaultdict(list)
+    for cap in j['annotations']:
+        fn_to_caps[id_to_fn[cap['image_id']]].append(cap['caption'])
+    fn_to_caps = dict(fn_to_caps)
+    return list(map(lambda x: fn_to_caps[x], fns))
+    
 def image_center_crop(img):
     h, w = img.shape[0], img.shape[1]
     pad_left = 0
@@ -122,3 +149,20 @@ def save_pickle(obj, fn):
 def read_pickle(fn):
     with open(fn, "rb") as f:
         return pickle.load(f)
+    
+    
+# look at training example (each has 5 captions)
+def show_trainig_example(train_img_fns, train_captions, example_idx=0):
+    """
+    You can change example_idx and see different images
+    """
+    zf = zipfile.ZipFile("data/train2014_sample.zip")
+    captions_by_file = dict(zip(train_img_fns, train_captions))
+    all_files = set(train_img_fns)
+    found_files = list(filter(lambda x: x.filename.rsplit("/")[-1] in all_files, zf.filelist))
+    example = found_files[example_idx]
+    img = decode_image_from_buf(zf.read(example))
+    plt.imshow(image_center_crop(img))
+    plt.title("\n".join(captions_by_file[example.filename.rsplit("/")[-1]]))
+    plt.show()
+    

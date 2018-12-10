@@ -7,7 +7,7 @@ import queue
 import threading
 import zipfile
 import json
-from collections import defaultdict
+from collections import defaultdict, Counter
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
@@ -18,6 +18,8 @@ from keras.applications import inception_v3
 from keras.models import Model
 from keras.layers import GlobalAveragePooling2D
 import tqdm
+import itertools
+import re
 
 def get_cnn_encoder():
     # Transfer Learning : we take the last hidden layer of IncetionV3 as an image embedding
@@ -26,6 +28,127 @@ def get_cnn_encoder():
     preprocess_for_model = inception_v3.preprocess_input
     model = Model(model.inputs, GlobalAveragePooling2D()(model.output))
     return model, preprocess_for_model
+
+
+# special tokens
+PAD = "#PAD#"
+UNK = "#UNK#"
+START = "#START#"
+END = "#END#"
+
+# split sentence into tokens (split into lowercased words)
+def split_sentence(sentence):
+    return list(filter(lambda x: len(x) > 0, re.split('\W+', sentence.lower())))
+
+def generate_vocabulary(train_captions):
+    """
+    Return {token: index} for all train tokens (words) that occur 5 times or more, 
+        `index` should be from 0 to N, where N is a number of unique tokens in the resulting dictionary.
+    Also, PAD (for batch padding), UNK (unknown, out of vocabulary), 
+        START (start of sentence) and END (end of sentence) tokens into the vocabulary.
+    """
+    concat_sentenc = itertools.chain.from_iterable(train_captions)
+    l = itertools.chain.from_iterable(map(lambda x: split_sentence(x),concat_sentenc))
+    counter=Counter(l)
+    concat_sentenc = itertools.chain.from_iterable(train_captions)
+    l = itertools.chain.from_iterable(map(lambda x: split_sentence(x),concat_sentenc))
+    vocab = [w for w in set(l) if counter[w]>=5] + [PAD, UNK, START, END]
+    return {token: index for index, token in enumerate(sorted(vocab))}
+    
+def caption_tokens_to_indices(captions, vocab):
+    """
+    `captions` argument is an array of arrays:
+    [
+        [
+            "image1 caption1",
+            "image1 caption2",
+            ...
+        ],
+        [
+            "image2 caption1",
+            "image2 caption2",
+            ...
+        ],
+        ...
+    ]
+    Replace all tokens with vocabulary indices, use UNK for unknown words (out of vocabulary).
+    Add START and END tokens to start and end of each sentence respectively.
+    One example would be the following:
+    [
+        [
+            [vocab[START], vocab["image1"], vocab["caption1"], vocab[END]],
+            [vocab[START], vocab["image1"], vocab["caption2"], vocab[END]],
+            ...
+        ],
+        ...
+    ]
+    """
+
+    f = lambda s: [vocab['#START#']]  + [vocab[w] if w in vocab else vocab['#UNK#'] 
+                                         for w in split_sentence(s)] +  [vocab['#END#']]
+    res = [list(map(f, captions[:][i])) for i in range(0,len(captions))]
+    return res
+
+# we will use this during training
+def batch_captions_to_matrix(batch_captions, pad_idx, max_len=None):
+    """
+    `batch_captions` is an array of arrays:
+    [
+        [vocab[START], ..., vocab[END]],
+        [vocab[START], ..., vocab[END]],
+        ...
+    ]
+    Put vocabulary indexed captions into np.array of shape (len(batch_captions), columns),
+        where "columns" is max(map(len, batch_captions)) when max_len is None
+        and "columns" = min(max_len, max(map(len, batch_captions))) otherwise.
+    Add padding with pad_idx where necessary.
+    Input example: [[1, 2, 3], [4, 5]]
+    Output example: np.array([[1, 2, 3], [4, 5, pad_idx]]) if max_len=None
+    Output example: np.array([[1, 2], [4, 5]]) if max_len=2
+    Output example: np.array([[1, 2, 3], [4, 5, pad_idx]]) if max_len=100
+    """
+    
+    if max_len:
+        batch_captions = [x[:max_len] for x in batch_captions]
+        n_pad = min(max_len, max(map(len, batch_captions))) - np.array([len(s) for s in batch_captions])
+    else:
+        n_pad = max(map(len, batch_captions)) - np.array([len(s) for s in batch_captions])
+        
+    padding = [[pad_idx]*n for n in n_pad]
+
+    matrix = np.array([batch_captions[i] + padding[i] for i in range(0, len(padding))])
+    return matrix
+
+# generate batch via random sampling of images and captions for them,
+# we use `max_len` parameter to control the length of the captions (truncating long captions)
+def generate_batch(images_embeddings, indexed_captions, batch_size, decoder, max_len=None):
+    """
+    `images_embeddings` is a np.array of shape [number of images, IMG_EMBED_SIZE].
+    `indexed_captions` holds 5 vocabulary indexed captions for each image:
+    [
+        [
+            [vocab[START], vocab["image1"], vocab["caption1"], vocab[END]],
+            [vocab[START], vocab["image1"], vocab["caption2"], vocab[END]],
+            ...
+        ],
+        ...
+    ]
+    Generate a random batch of size `batch_size`.
+    Take random images and choose one random caption for each image.
+    Return feed dict {decoder.img_embeds: ..., decoder.sentences: ...}.
+    """
+
+    batch = np.random.choice(images_embeddings.shape[0], batch_size, replace=False)
+    batch_image_embeddings = images_embeddings[batch, :]
+    batch_captions = indexed_captions[batch]
+    batch_captions_sample = [batch_captions[i][int(np.random.choice(5,1))] 
+                                      for i in range(0, len(batch_captions))]
+    batch_captions_matrix = batch_captions_to_matrix(batch_captions_sample, pad_idx=1, 
+                                                max_len=max_len)
+    return {decoder.img_embeds: batch_image_embeddings, 
+            decoder.sentences: batch_captions_matrix}
+
+# Image Preprocessing Functions
 
 def get_captions_for_fns(fns, zip_fn, zip_json_path):
     # extract captions from zip

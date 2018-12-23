@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-### Some image captioning preprocessing functions ###
+# Some image captioning preprocessing functions #
 
 import os
 import queue
@@ -21,6 +21,7 @@ import tqdm
 import itertools
 import re
 
+
 def get_cnn_encoder():
     # Transfer Learning : we take the last hidden layer of IncetionV3 as an image embedding
     K.set_learning_phase(False)
@@ -36,9 +37,11 @@ UNK = "#UNK#"
 START = "#START#"
 END = "#END#"
 
+
 # split sentence into tokens (split into lowercased words)
 def split_sentence(sentence):
     return list(filter(lambda x: len(x) > 0, re.split('\W+', sentence.lower())))
+
 
 def generate_vocabulary(train_captions):
     """
@@ -48,13 +51,14 @@ def generate_vocabulary(train_captions):
         START (start of sentence) and END (end of sentence) tokens into the vocabulary.
     """
     concat_sentenc = itertools.chain.from_iterable(train_captions)
-    l = itertools.chain.from_iterable(map(lambda x: split_sentence(x),concat_sentenc))
-    counter=Counter(l)
+    l = itertools.chain.from_iterable(map(lambda x: split_sentence(x), concat_sentenc))
+    counter = Counter(l)
     concat_sentenc = itertools.chain.from_iterable(train_captions)
-    l = itertools.chain.from_iterable(map(lambda x: split_sentence(x),concat_sentenc))
-    vocab = [w for w in set(l) if counter[w]>=5] + [PAD, UNK, START, END]
+    l = itertools.chain.from_iterable(map(lambda x: split_sentence(x), concat_sentenc))
+    vocab = [w for w in set(l) if counter[w] >= 5] + [PAD, UNK, START, END]
     return {token: index for index, token in enumerate(sorted(vocab))}
-    
+
+
 def caption_tokens_to_indices(captions, vocab):
     """
     `captions` argument is an array of arrays:
@@ -84,10 +88,11 @@ def caption_tokens_to_indices(captions, vocab):
     ]
     """
 
-    f = lambda s: [vocab['#START#']]  + [vocab[w] if w in vocab else vocab['#UNK#'] 
-                                         for w in split_sentence(s)] +  [vocab['#END#']]
-    res = [list(map(f, captions[:][i])) for i in range(0,len(captions))]
+    f = lambda s: [vocab['#START#']] + [vocab[w] if w in vocab else vocab['#UNK#']
+                                        for w in split_sentence(s)] + [vocab['#END#']]
+    res = [list(map(f, captions[:][i])) for i in range(0, len(captions))]
     return res
+
 
 # we will use this during training
 def batch_captions_to_matrix(batch_captions, pad_idx, max_len=None):
@@ -107,17 +112,18 @@ def batch_captions_to_matrix(batch_captions, pad_idx, max_len=None):
     Output example: np.array([[1, 2], [4, 5]]) if max_len=2
     Output example: np.array([[1, 2, 3], [4, 5, pad_idx]]) if max_len=100
     """
-    
+
     if max_len:
         batch_captions = [x[:max_len] for x in batch_captions]
         n_pad = min(max_len, max(map(len, batch_captions))) - np.array([len(s) for s in batch_captions])
     else:
         n_pad = max(map(len, batch_captions)) - np.array([len(s) for s in batch_captions])
-        
-    padding = [[pad_idx]*n for n in n_pad]
+
+    padding = [[pad_idx] * n for n in n_pad]
 
     matrix = np.array([batch_captions[i] + padding[i] for i in range(0, len(padding))])
     return matrix
+
 
 # generate batch via random sampling of images and captions for them,
 # we use `max_len` parameter to control the length of the captions (truncating long captions)
@@ -141,12 +147,13 @@ def generate_batch(images_embeddings, indexed_captions, batch_size, decoder, max
     batch = np.random.choice(images_embeddings.shape[0], batch_size, replace=False)
     batch_image_embeddings = images_embeddings[batch, :]
     batch_captions = indexed_captions[batch]
-    batch_captions_sample = [batch_captions[i][int(np.random.choice(5,1))] 
-                                      for i in range(0, len(batch_captions))]
-    batch_captions_matrix = batch_captions_to_matrix(batch_captions_sample, pad_idx=1, 
-                                                max_len=max_len)
-    return {decoder.img_embeds: batch_image_embeddings, 
+    batch_captions_sample = [batch_captions[i][int(np.random.choice(5, 1))]
+                             for i in range(0, len(batch_captions))]
+    batch_captions_matrix = batch_captions_to_matrix(batch_captions_sample, pad_idx=1,
+                                                     max_len=max_len)
+    return {decoder.img_embeds: batch_image_embeddings,
             decoder.sentences: batch_captions_matrix}
+
 
 # Image Preprocessing Functions
 
@@ -160,7 +167,8 @@ def get_captions_for_fns(fns, zip_fn, zip_json_path):
         fn_to_caps[id_to_fn[cap['image_id']]].append(cap['caption'])
     fn_to_caps = dict(fn_to_caps)
     return list(map(lambda x: fn_to_caps[x], fns))
-    
+
+
 def image_center_crop(img):
     h, w = img.shape[0], img.shape[1]
     pad_left = 0
@@ -175,7 +183,7 @@ def image_center_crop(img):
         diff = w - h
         pad_left = diff - diff // 2
         pad_right = diff // 2
-    return img[pad_top:h-pad_bottom, pad_left:w-pad_right, :]
+    return img[pad_top:h - pad_bottom, pad_left:w - pad_right, :]
 
 
 def decode_image_from_buf(buf):
@@ -272,8 +280,8 @@ def save_pickle(obj, fn):
 def read_pickle(fn):
     with open(fn, "rb") as f:
         return pickle.load(f)
-    
-    
+
+
 # look at training example (each has 5 captions)
 def show_trainig_example(train_img_fns, train_captions, example_idx=0):
     """
@@ -288,4 +296,3 @@ def show_trainig_example(train_img_fns, train_captions, example_idx=0):
     plt.imshow(image_center_crop(img))
     plt.title("\n".join(captions_by_file[example.filename.rsplit("/")[-1]]))
     plt.show()
-    
